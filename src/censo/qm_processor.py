@@ -15,14 +15,12 @@ from collections.abc import Callable
 
 from .datastructure import ParallelJob
 from .params import (
-    ENVIRON,
-    CODING,
-    rot_sym_num,
+    Config,
     PLENGTH,
     DIGILEN,
     WARNLEN,
 )
-from .utilities import print, frange
+from .utilities import print, frange, Factory
 from .logging import setup_logger
 
 logger = setup_logger(__name__)
@@ -67,6 +65,42 @@ class QmProc:
         "xtb_rrho": [
             "gfnv",
         ],
+    }
+
+    # rotational entropy from symmetry
+    # https://cccbdb.nist.gov/thermo.asp
+    _rot_sym_num = {
+        "c1": 1,
+        "ci": 1,
+        "cs": 1,
+        "c2": 2,
+        "c3": 3,
+        "c4": 4,
+        "c5": 5,
+        "c6": 6,
+        "c7": 7,
+        "c8": 8,
+        "c9": 9,
+        "c10": 10,
+        "c11": 11,
+        "s4": 2,
+        "s6": 3,
+        "s8": 4,
+        "d2": 4,
+        "d3": 6,
+        "d4": 8,
+        "d5": 10,
+        "d6": 12,
+        "d7": 14,
+        "d8": 16,
+        "d9": 18,
+        "d10": 20,
+        "t": 12,
+        "th": 12,
+        "td": 12,
+        "o": 24,
+        "oh": 24,
+        "ih": 60,
     }
 
     @classmethod
@@ -181,11 +215,11 @@ class QmProc:
         logger.debug(f"{f'worker{os.getpid()}:':{WARNLEN}}Running on {job.omp} cores.")
         # jobtype is basically an ordered (!!!) (important e.g. if sp is required before the next step)
         # list containing the types of computations to do
-        if not all(t in self._jobtypes.keys() for t in job.jobtype):
+        if not all(t in self._jobtypes for t in job.jobtype):
             raise RuntimeError(
                 f"At least one jobtype of {job.jobtype} is not available for "
                 + f"{self.__class__.__name__}.\nAvailable "
-                + f"jobtypes are: {list(self._jobtypes.keys())}"
+                + f"jobtypes are: {list(self._jobtypes)}"
             )
 
         # run all the computations
@@ -277,7 +311,7 @@ class QmProc:
                 stderr=subprocess.PIPE,
                 cwd=jobdir,
                 stdout=outputfile,
-                env=ENVIRON,
+                env=Config.ENVIRON,
             )
 
             logger.debug(
@@ -315,8 +349,7 @@ class QmProc:
 
         return jobdir
 
-    @staticmethod
-    def _get_sym_num(sym=None, linear=None):
+    def _get_sym_num(self, sym=None, linear=None):
         """Get rotational symmetry number from Schoenfließ symbol"""
         if sym is None:
             sym = "c1"
@@ -329,9 +362,9 @@ class QmProc:
         elif linear and "d" in sym.lower()[0]:
             symnum = 2
             return symnum
-        for key in rot_sym_num.keys():
+        for key in self._rot_sym_num:
             if key in sym.lower():
-                symnum = rot_sym_num.get(key, 1)
+                symnum = self._rot_sym_num.get(key, 1)
                 break
         return symnum
 
@@ -444,7 +477,7 @@ class QmProc:
             return result, meta
 
         # read energy from outputfile
-        with open(outputpath, "r", encoding=CODING, newline=None) as outputfile:
+        with open(outputpath, "r", encoding=Config.CODING, newline=None) as outputfile:
             for line in outputfile.readlines():
                 if "| TOTAL ENERGY" in line:
                     result["energy"] = float(line.split()[3])
@@ -679,7 +712,7 @@ class QmProc:
             return result, meta
 
         # read output and store lines
-        with open(outputpath, "r", encoding=CODING, newline=None) as outputfile:
+        with open(outputpath, "r", encoding=Config.CODING, newline=None) as outputfile:
             lines = outputfile.readlines()
 
         if job.prepinfo["general"]["multitemp"]:
@@ -762,7 +795,7 @@ class QmProc:
         with open(
             os.path.join(jobdir, "xtb_enso.json"),
             "r",
-            encoding=CODING,
+            encoding=Config.CODING,
             newline=None,
         ) as f:
             data = json.load(f)
@@ -824,3 +857,6 @@ class QmProc:
             meta["error"] = "Could not read xtb_enso.json"
 
         return result, meta
+
+
+Factory.register_builder("xtb", QmProc)
