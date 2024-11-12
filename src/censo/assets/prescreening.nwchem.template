@@ -1,0 +1,19 @@
+start prescreening_calc
+
+memory total 2000 mb
+
+geometry units angstroms
+{geom}
+end
+
+basis
+* library 6-31g
+end
+
+dft
+  xc b3lyp
+  grid fine
+  convergence tight
+end
+
+task dft energy

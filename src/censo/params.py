@@ -68,12 +68,13 @@ ASSETS_PATH = __file__.replace("params.py", "assets")
 
 USER_ASSETS_PATH = os.path.join(os.path.expanduser("~"), ".censo2_assets")
 
-PROGS = ("orca", "tm")
+PROGS = ("orca", "tm", "nwchem")
 
 SOLV_MODS: dict[str, tuple] = {
     "orca": ("cpcm", "smd"),
     "tm": ("cosmo", "dcosmors", "cosmors", "cosmors-fine"),
     "xtb": ("alpb", "gbsa"),
+    "nwchem": ("cosmo", "smd"),
 }
 
 GRIDOPTIONS = (

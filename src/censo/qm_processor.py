@@ -11,6 +11,8 @@ import subprocess
 from time import perf_counter
 from collections.abc import Callable
 
+# from censo.nwchem_processor import NWChemProc
+
 from .datastructure import ParallelJob
 from .params import (
     ENVIRON,
@@ -52,6 +54,7 @@ class QmProc:
         "cosmothermversion": "",
         "mpshiftpath": "",
         "escfpath": "",
+        "nwchempath": "",
     }
 
     _req_settings_xtb = {
@@ -102,6 +105,68 @@ class QmProc:
 
         self.workdir = workdir
 
+    # def _nwchem_sp(self, job: ParallelJob, jobdir: str) -> tuple:
+    #     """
+    #     Handle NWChem single-point energy calculation.
+
+    #     Args:
+    #         job (ParallelJob): The job configuration.
+    #         jobdir (str): Directory to run the job.
+
+    #     Returns:
+    #         tuple: (result, metadata)
+    #     """
+    #     nwchem_processor = NwchemProcessor(self._paths["nwchempath"])
+
+    #     # Prepare the input file path and output file path
+    #     input_file = os.path.join(jobdir, "nwchem_input.nw")
+    #     output_file = os.path.join(jobdir, "nwchem_output.out")
+
+    #     # Run the NWChem calculation
+    #     try:
+    #         energy = nwchem_processor.run_calculation(
+    #             input_file, output_file, num_cores=job.omp
+    #         )
+    #         result = {"energy": energy}
+    #         meta = {"success": True}
+    #     except RuntimeError as e:
+    #         logger.error(f"NWChem calculation failed: {e}")
+    #         result = None
+    #         meta = {"success": False, "error": str(e)}
+
+    #     return result, meta
+
+    # def _nwchem_opt(self, job: ParallelJob, jobdir: str) -> tuple:
+    #     """
+    #     Handle NWChem geometry optimization calculation.
+
+    #     Args:
+    #         job (ParallelJob): The job configuration.
+    #         jobdir (str): Directory to run the job.
+
+    #     Returns:
+    #         tuple: (result, metadata)
+    #     """
+    #     nwchem_processor = NwchemProcessor(self._paths["nwchempath"])
+
+    #     # Prepare the input file path and output file path
+    #     input_file = os.path.join(jobdir, "nwchem_opt_input.nw")
+    #     output_file = os.path.join(jobdir, "nwchem_opt_output.out")
+
+    #     # Run the NWChem calculation
+    #     try:
+    #         energy = nwchem_processor.run_calculation(
+    #             input_file, output_file, num_cores=job.omp
+    #         )
+    #         result = {"optimized_energy": energy}
+    #         meta = {"success": True}
+    #     except RuntimeError as e:
+    #         logger.error(f"NWChem optimization failed: {e}")
+    #         result = None
+    #         meta = {"success": False, "error": str(e)}
+
+    #     return result, meta
+
     def run(self, job: ParallelJob) -> ParallelJob:
         """
         Run methods depending on jobtype.
@@ -124,6 +189,8 @@ class QmProc:
             )
 
         # run all the computations
+        print("jobtypes", job.jobtype)
+        # exit()
         for j in job.jobtype:
             # Create jobdir
             jobdir = self._create_jobdir(job.conf.name, j)
@@ -184,6 +251,7 @@ class QmProc:
             pathmap = {
                 "xtb": "xtbpath",
                 "orca": "orcapath",
+                "nwchem": "nwchempath",
             }
             try:
                 assert self._paths[pathmap[prog]].strip() != ""
@@ -328,6 +396,10 @@ class QmProc:
             file.writelines(job.conf.tocoord())
 
         # setup call for xtb single-point
+        print("job", job)
+        print(job.prepinfo)
+        print()
+        # exit()
         call = [
             f"{filename}.coord",
             "--" + job.prepinfo["xtb_sp"]["gfnv"],
@@ -402,6 +474,13 @@ class QmProc:
         }
         """
         # what is returned in the end
+        # job.prepinfo["xtb_sp"] = {
+        #     "gfnv": "2",
+        #     "solvent_key_xtb": SolventHelper.get_solvent(
+        #         self._get_general_settings()["sm_rrho"],
+        #         self._get_general_settings()["solvent"],
+        #     ),
+        # }
         result = {
             "gsolv": None,
             "energy_xtb_gas": None,
@@ -710,21 +789,21 @@ class QmProc:
                     "ZPVE", 0.0
                 )
                 if not job.prepinfo["general"]["multitemp"]:
-                    result["entropy"][
-                        job.prepinfo["general"]["temperature"]
-                    ] = None  # set this to None for predictability
+                    result["entropy"][job.prepinfo["general"]["temperature"]] = (
+                        None  # set this to None for predictability
+                    )
             else:
                 result["energy"] = data.get("G(T)", 0.0)
                 result["gibbs"][job.prepinfo["general"]["temperature"]] = data.get(
                     "G(T)", 0.0
                 )
                 if not job.prepinfo["general"]["multitemp"]:
-                    result["enthalpy"][
-                        job.prepinfo["general"]["temperature"]
-                    ] = None  # set this to None for predictability
-                    result["entropy"][
-                        job.prepinfo["general"]["temperature"]
-                    ] = None  # set this to None for predictability
+                    result["enthalpy"][job.prepinfo["general"]["temperature"]] = (
+                        None  # set this to None for predictability
+                    )
+                    result["entropy"][job.prepinfo["general"]["temperature"]] = (
+                        None  # set this to None for predictability
+                    )
                     # FIXME - why though?
 
             # only determine symmetry if all the needed information is there

@@ -1,0 +1,18 @@
+start nmr_calc
+
+memory total 4000 mb
+
+geometry units angstroms
+{geom}
+end
+
+basis
+* library aug-cc-pVTZ
+end
+
+dft
+  xc b3lyp
+  nmr
+end
+
+task dft property

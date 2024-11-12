@@ -1,6 +1,7 @@
 from .qm_processor import QmProc
 from .orca_processor import OrcaProc
 from .tm_processor import TmProc
+from .nwchem_processor import NWChemProc
 
 
 # from censo.tm_processor import TmProc
@@ -11,6 +12,7 @@ class ProcessorFactory:
     __proctypes: dict[str, type] = {
         "orca": OrcaProc,
         "tm": TmProc,
+        "nwchem": NWChemProc,
     }
 
     @classmethod

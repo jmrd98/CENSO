@@ -91,7 +91,10 @@ class Prescreening(EnsembleOptimizer):
                 jobtype = ["gsolv"]
 
         # Compile all information required for the preparation of input files in parallel execution step
+        print("prep1", jobtype)
         prepinfo = self.setup_prepinfo(jobtype)
+        print("prep2", prepinfo)
+        # exit()
 
         # compute results
         # for structure of results from handler.execute look there

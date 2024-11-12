@@ -161,7 +161,7 @@ class MoleculeData:
 
 class ParallelJob:
 
-    def __init__(self, conf: GeometryData, jobtype: list[str]):
+    def __init__(self, conf: GeometryData, jobtype: list[str], name: str = "unnamed_job"):
         # conformer for the job
         self.conf = conf
 
@@ -199,3 +199,5 @@ class ParallelJob:
 
         # stores all flags for the jobtypes
         self.flags: dict[str, any] = {}
+
+        self.name = name

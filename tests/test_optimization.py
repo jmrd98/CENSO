@@ -15,6 +15,7 @@ class TestOptimization(unittest.TestCase):
         ensemble = EnsembleData(os.getcwd())
         ensemble.read_input(
             "testfiles/crest_conformers.xyz", charge=2, unpaired=7)
+        ncores = 4
 
         # Create an instance of the Optimization class
         optimization = Optimization(ensemble)
@@ -46,7 +47,7 @@ class TestOptimization(unittest.TestCase):
         mock_execute.return_value = (mock_results, mock_results_2)
 
         # Call the run method
-        optimization.run()
+        optimization.run(ncores=ncores)
 
     def doCleanups(self):
         # perform cleanup

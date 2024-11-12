@@ -1,0 +1,19 @@
+start screening_calc
+
+memory total 4000 mb
+
+geometry units angstroms
+{geom}
+end
+
+basis
+* library def2-TZVP
+end
+
+dft
+  xc pbe0
+  grid ultrafine
+  convergence verytight
+end
+
+task dft energy

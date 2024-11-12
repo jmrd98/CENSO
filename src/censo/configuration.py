@@ -213,6 +213,7 @@ def find_program_paths() -> dict[str, str]:
         "xtbpath": "xtb",
         "mpshiftpath": "mpshift",
         "escfpath": "escf",
+        "nwchempath": "nwchem"
         # "crestpath": "crest",
         # "cosmorssetup": None,
         # "dbpath": None,
