@@ -280,6 +280,8 @@ def execute(
     jobs = prepare_jobs(conformers, prepinfo, jobtype)
 
     # initialize the processor for the respective program
+    print(prog)
+    # exit()
     processor = Factory.create(
         prog,
         workdir,

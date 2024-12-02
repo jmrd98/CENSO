@@ -30,9 +30,9 @@ class Config:
 
     USER_ASSETS_PATH = os.path.join(os.path.expanduser("~"), ".censo2_assets")
 
-PROGS = ("orca", "tm", "nwchem")
+    PROGS = ("orca", "tm", "nwchem")
 
-SOLV_MODS: dict[str, tuple] = {
+    SOLV_MODS: dict[str, tuple] = {
     "orca": ("cpcm", "smd"),
     "tm": ("cosmo", "dcosmors", "cosmors", "cosmors-fine"),
     "xtb": ("alpb", "gbsa"),

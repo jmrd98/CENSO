@@ -43,6 +43,7 @@ class Factory:
         Generic factory method
         """
         builder = cls.__builders.get(name, None)
+        print(builder)
 
         if builder is not None:
             return builder(*args, **kwargs)
@@ -68,10 +69,18 @@ class DfaHelper:
         Returns:
             list[str]: The list of functionals.
         """
+        # from pprint import pprint
+        # print("the thingy")
+        # pprint(cls._dfa_dict["functionals"].items())
+        # print(prog)
+        # funclist= [func for func, v in cls._dfa_dict["functionals"].items() if v[prog.lower()] is not None]
+        # print([i for i in funclist])
+        # exit()
         return [
             func
             for func, v in cls._dfa_dict["functionals"].items()
-            if v[prog.lower()] is not None
+            # if v[prog.lower()] is not None
+            
         ]
 
     @classmethod

@@ -105,6 +105,7 @@ class PropertyCalculator(CensoPart):
                 self._ensemble.results,
             )
             opts = sorted(opts, key=lambda part: part.data["nconf_out"])
+            print(opts)
 
             # Get the results with the smallest outputs
             opts_iter = iter(opts)
@@ -127,8 +128,10 @@ class PropertyCalculator(CensoPart):
                 using_part = smallest_results[0]
             else:
                 # This will put the highest quality part at the top (highest part number)
+                print(self._part_nos)
+                # exit()
                 smallest_results.sort(
-                    lambda part: self._part_nos[part.name], reverse=True
+                    key=lambda part: self._part_nos[part.name], reverse=True
                 )
                 using_part = smallest_results[0]
 

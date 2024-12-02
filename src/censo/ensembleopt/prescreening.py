@@ -18,7 +18,9 @@ class Prescreening(EnsembleOptimizer):
 
     The list of conformers is then updated using Gtot (only DFT single-point energy if in gas-phase).
     """
-
+    # from pprint import pprint
+    # pprint({prog: DfaHelper.get_funcs(prog) for prog in Config.PROGS})
+    # exit()
     _grid = "low"
 
     _options = {

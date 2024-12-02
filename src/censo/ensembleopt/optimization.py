@@ -92,9 +92,11 @@ class Optimization(EnsembleOptimizer):
         """
         # Set jobtype depending on program (tm has not tm-pure geom opt yet)
         jobtype = None
+        if self.get_settings()["prog"] == "nwchem":
+            jobtype = ["opt"]
         if self.get_settings()["prog"] == "orca":
             jobtype = ["xtb_opt"] if self.get_settings()["xtb_opt"] else ["opt"]
-        else:
+        if self.get_settings()["prog"] == "tm":
             if not self.get_settings()["xtb_opt"]:
                 logger.warning(
                     "TURBOMOLE-driven geometry optimization not available yet. Switching back to ANCOPT as driver."

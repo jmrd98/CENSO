@@ -9,6 +9,7 @@ from .ensembledata import EnsembleData
 from .params import DIGILEN, KB, AU2J, Config
 from .logging import setup_logger
 from .utilities import print, h2, SolventHelper
+from .nwchem_processor import NWChemProc
 
 logger = setup_logger(__name__)
 
@@ -411,6 +412,31 @@ class CensoPart:
         temperature given values for free enthalpy.
         """
         temp = self.get_general_settings()["temperature"]
+        # print([self.data["results"][conf.name]
+        #     for conf in self._ensemble.conformers])
+        print(self._ensemble.conformers)
+        for conf in self._ensemble.conformers:
+            print(conf.name)
+            if conf.name not in self.data["results"]:
+                print(f"Conformer {conf.name} not found in results")
+            elif "gtot" not in self.data["results"][conf.name]:
+                print(f"'gtot' not found for conformer {conf.name}")
+            else:
+                print(
+                    f"Conformer {conf.name} has gtot value {self.data['results'][conf.name]['gtot']}"
+                )
+        print(
+            all(
+                "gtot" in self.data["results"][conf.name]
+                for conf in self._ensemble.conformers
+            )
+        )
+        minfree: float = min(
+                self.data["results"][conf.name]["gtot"]
+                for conf in self._ensemble.conformers
+            )
+        print(minfree)
+        # exit()
         # find lowest gtot value
         if all(
             "gtot" in self.data["results"][conf.name]

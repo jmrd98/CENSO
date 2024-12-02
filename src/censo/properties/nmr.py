@@ -356,6 +356,9 @@ class NMR(PropertyCalculator):
             with open(os.path.join(confdir, "nmrprop.dat"), "w") as f:
                 f.writelines(lines)
 
+            with open(os.path.join(confdir, "coord"), "w") as f:
+                f.writelines(conf.geom.tocoord())
+
         print(
             "\nGeneration of ANMR files done. Don't forget to setup your .anmrrc file."
         )

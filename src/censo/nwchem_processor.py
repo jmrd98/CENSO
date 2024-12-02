@@ -3,15 +3,17 @@ import shutil
 from collections import OrderedDict
 from functools import reduce
 
-from .utilities import od_insert, SolventHelper
+from .params import Config
+
+from .utilities import od_insert, SolventHelper, Factory
 from .logging import setup_logger
 from .datastructure import GeometryData, ParallelJob
-from .params import (
-    CODING,
-    USER_ASSETS_PATH,
-    WARNLEN,
-)
-from .part import CensoPart
+# from .params import (
+#     CODING,
+#     USER_ASSETS_PATH,
+#     WARNLEN,
+# )
+# from .part import CensoPart
 
 from .qm_processor import QmProc
 
@@ -62,7 +64,7 @@ class NWChemParser:
         """
         # Extract values from the OrderedDict
         job_name = indict.get("start", ["job"])[0]
-        geometry = indict.get("geometry", [])[0]
+        geometry = indict.get("geom", [])[0]
         # print("geometry", geometry)
         # geometry is [{'element': 'O', 'xyz': [-2.0156358993, 0.4782335569, 0.2431094143]}, {'element': 'C', 'xyz': [-0.9402116723, 0.0302552922, -0.0526792532]}, {'element': 'C', 'xyz': [-0.725198202, -1.4427194194, -0.0897633946]}, {'element': 'H', 'xyz': [-1.0221728335, -1.8846780121, 0.8607375561]}, {'element': 'H', 'xyz': [-1.3304708138, -1.8929920856, -0.8755536896]}, {'element': 'H', 'xyz': [0.3220882644, -1.6883867431, -0.2705475036]}, {'element': 'C', 'xyz': [0.1878113278, 0.9550448642, -0.4060231877]}, {'element': 'H', 'xyz': [0.3196376861, 0.9600966566, -1.4917712337]}, {'element': 'H', 'xyz': [-0.099306823, 1.9728128902, -0.1231797244]}, {'element': 'C', 'xyz': [1.4678988806, 0.5660538741, 0.2408202311]}, {'element': 'H', 'xyz': [1.9474025289, 1.2315483811, 0.9510468963]}, {'element': 'O', 'xyz': [2.0142754, -0.4777864802, 0.0476423808]}]
         # needs to be in the format 'O 0.00000000 0.00000000 0.00000000\nC 0.75695031 -0.58587586 0.00000000\nH -0.75695031 -0.58587586 0.00000000\n'
@@ -79,8 +81,9 @@ class NWChemParser:
         dft_section = "\n".join(indict.get("dft", []))
         charge = indict.get("charge", ["0"])[0]  # Default charge is 0
         multiplicity = indict.get("multiplicity", ["1"])[0]  # Default multiplicity is 1
-        task = indict.get("task", ["energy"])[0]
+        task = "\n".join(indict.get("task", []))
         solvation = "\n".join(indict.get("solvation", []))
+        property = "\n".join(indict.get("property", []))
 
         # Define the template using str.format() placeholders
         nwchem_template = """{job_name}
@@ -91,6 +94,7 @@ charge {charge}
 {basis_set}
 {solvation}
 {dft_section}
+{property}
 {task}
 """
 
@@ -104,6 +108,7 @@ charge {charge}
             dft_section=dft_section,
             task=task,
             solvation=solvation,
+            property=property,
         )
         # print("job_name", job_name)
         # print("charge", charge)
@@ -180,6 +185,8 @@ class NWChemProc(QmProc):
             **{
                 "sp": self._sp,
                 "gsolv": self._gsolv,
+                # "xtb_opt": self._xtb_opt,
+                # "xtb_opt": self._opt,
                 # "xtb_sp": self._xtb_sp,
                 # "xtb_gsolv": self._xtb_gsolv,
                 "opt": self._opt,
@@ -187,6 +194,8 @@ class NWChemProc(QmProc):
                 "uvvis": self._uvvis,
             },
         }
+        # print(self._jobtypes)
+        # exit()
         # censopart = CensoPart()
         # self._get_settings = censopart.get_settings
         # self._get_general_settings = censopart.get_general_settings
@@ -347,6 +356,9 @@ class NWChemProc(QmProc):
 
         # Execute the NWChem job
         call = [f"{filename}.inp"]
+        call.insert(0, "mpirun")
+        call.insert(1, "-np")
+        call.insert(2, str(job.omp))
         returncode, errors = self._make_call("nwchem", call, outputpath, jobdir)
 
         # Check if the job succeeded based on returncode
@@ -424,11 +436,14 @@ class NWChemProc(QmProc):
             parser.write_input(inputpath, indict)
 
         # Handle molecular orbitals if needed
-        if self.copy_mo:
-            self.__copy_mo(jobdir, filename, job.mo_guess)
+        # if self.copy_mo:
+        #     self.__copy_mo(jobdir, filename, job.mo_guess)
 
         # Execute the NWChem job
         call = [f"{filename}.inp"]
+        call.insert(0, "mpirun")
+        call.insert(1, "-np")
+        call.insert(2, str(job.omp))
         returncode, errors = self._make_call("nwchem", call, outputpath, jobdir)
 
         # Check if the job succeeded
@@ -442,26 +457,44 @@ class NWChemProc(QmProc):
 
         # Get final energy
         result["energy"] = next(
-            (float(line.split()[4]) for line in lines if "Total SCF energy" in line),
+            (float(line.split()[4]) for line in lines if "Total DFT energy" in line),
             None,
         )
+        # set convergance flag
+        result["converged"] = any("Optimization converged" in line for line in lines)
 
         # Extract optimized geometry
         geom_start = False
         geometry = []
+        xyz = []
+        dash_no = 0
         for line in lines:
-            if "Output coordinates" in line:
+            if "Optimization converged" in line:
+                continue
+            if "Geometry" in line:
                 geom_start = True
                 continue
-            if geom_start and line.strip() == "":
-                break
-            if geom_start:
-                geometry.append(line.strip())
+            if geom_start and "----" in line:
+                dash_no += 1
+                continue
+            if dash_no >= 2 and line.strip():
+                if "atomic mass" in line.lower().strip():
+                    break
+                parts = line.split()
+                # print(line)
+                tag = parts[1]
+                x, y, z = map(float, parts[3:6])
+                geometry.append(f"{tag} {x: .10f} {y: .10f} {z: .10f}")
+                xyz.append({"element": tag, "xyz": [x, y, z]})
 
+        # print(geometry)
         # Store the optimized geometry
         if geometry:
             result["geometry"] = "\n".join(geometry)
+        if xyz:
+            result["geom"] = xyz
 
+        print(job.conf)
         # Check for errors and update metadata
         if meta["success"]:
             meta["error"] = self.__check_output(lines)
@@ -470,8 +503,9 @@ class NWChemProc(QmProc):
             meta["error"] = self.__returncode_to_err.get(returncode, "unknown_error")
 
         # Handle molecular orbitals if present
-        if self.copy_mo and os.path.isfile(os.path.join(jobdir, f"{filename}.movec")):
-            meta["mo_path"] = os.path.join(jobdir, f"{filename}.movec")
+        # if self.copy_mo and os.path.isfile(os.path.join(jobdir, f"{filename}.movec")):
+        #     meta["mo_path"] = os.path.join(jobdir, f"{filename}.movec")
+        print(result, meta)
 
         return result, meta
 
@@ -683,7 +717,9 @@ class NWChemProc(QmProc):
         """
         # Initialize result and meta dictionaries
         result = {
-            "energy": None,
+            "gsolv": None,
+            "energy_gas": None,
+            "energy_solv": None,
         }
         meta = {
             "success": None,
@@ -694,42 +730,90 @@ class NWChemProc(QmProc):
         inputpath = os.path.join(jobdir, f"{filename}.inp")
         outputpath = os.path.join(jobdir, f"{filename}.out")
 
-        # Prepare input for solvation model calculation
-        if prep:
-            indict = self.__prep(job, "sp", no_solv=no_solv)
-            indict = self.__apply_flags(job, indict)
+        # calc gas phase energy
+        spres, spmeta = self._sp(job, jobdir, filename="sp_gas", no_solv=True)
 
-            # Write input file for NWChem solvent calculation
-            parser = NWChemParser()
-            parser.write_input(inputpath, indict)
-
-        # Execute the NWChem job
-        call = [f"{filename}.inp"]
-        returncode, errors = self._make_call("nwchem", call, outputpath, jobdir)
-
-        # Check if the job succeeded
-        meta["success"] = returncode == 0
-        if not meta["success"]:
-            logger.warning(
-                f"Solvent model job for {job.conf.name} failed. Stderr output:\n{errors}"
-            )
-
-        # Parse the output to extract energy
-        with open(outputpath, "r", encoding="utf-8") as out:
-            lines = out.readlines()
-        result["energy"] = next(
-            (float(line.split()[4]) for line in lines if "Total DFT energy" in line),
-            None,
-        )
-
-        # Check for errors and update metadata
-        if meta["success"]:
-            meta["error"] = self.__check_output(lines)
-            meta["success"] = meta["error"] is None and result["energy"] is not None
+        # check if gas phase energy calculation was successful
+        if spmeta["success"]:
+            result["energy_gas"] = spres["energy"]
         else:
-            meta["error"] = self.__returncode_to_err.get(returncode, "unknown_error")
+            meta["success"] = False
+            meta["error"] = spmeta["error"]
+            return result, meta
+
+        # calc in solution
+        spres, spmeta = self._sp(job, jobdir, filename="sp_solv", no_solv=False)
+
+        # check if solvated energy calculation was successful
+        if spmeta["success"]:
+            result["energy_solv"] = spres["energy"]
+        else:
+            meta["success"] = False
+            meta["error"] = spmeta["error"]
+            return result, meta
+
+        # only reached if both gas-phase and solvated sp succeeded
+
+        # calc solvation enthalpy
+        result["gsolv"] = result["energy_solv"] - result["energy_gas"]
+        meta["success"] = True
 
         return result, meta
+
+    # def _opt(
+    #     self, job: ParallelJob, jobdir: str, filename: str = "opt", prep: bool = True
+    # ) -> tuple[dict[str, any], dict[str, any]]:
+    #     """
+    #     Run a geometry optimization calculation using NWChem.
+    #     """
+
+    #     # prepare result and meta dictionaries
+    #     # 'ecyc' contains the energies for all cycles, 'cycles' stores the number of required cycles
+    #     # 'gncyc' contains the gradient norms for all cycles
+    #     # 'energy' contains the final energy of the optimization (converged or unconverged)
+    #     # 'geom' stores the optimized geometry in GeometryData.xyz format
+    #     result = {
+    #         "energy": None,
+    #         "cycles": None,
+    #         "converged": None,
+    #         "ecyc": None,
+    #         "grad_norm": None,
+    #         "gncyc": None,
+    #         "geom": None,
+    #     }
+
+    #     meta = {
+    #         "success": None,
+    #         "error": None,
+    #         "mo_path": None,
+    #     }
+
+    #     inputpath = os.path.join(jobdir, f"{filename}.inp")
+    #     outputpath = os.path.join(jobdir, f"{filename}.out")
+
+    #     # prepare input for geometry optimization
+    #     if prep:
+    #         indict = self.__prep(job, "opt")
+    #         indict = self.__apply_flags(job, indict)
+
+    #         # write input file for NWChem optimization
+    #         parser = NWChemParser()
+    #         parser.write_input(inputpath, indict)
+
+    #         # run the NWChem job
+    #         call = [f"{filename}.inp"]
+    #         returncode, errors = self._make_call("nwchem", call, outputpath, jobdir)
+
+    #     # Check if the job succeeded
+    #     meta["success"] = returncode == 0
+    #     if not meta["success"]:
+    #         logger.warning(f"Job for {job.conf.name} failed. Stderr output:\n{errors}")
+
+    #     # Parse the output for energy and geometry
+    #     with open(outputpath, "r", encoding="utf-8") as out:
+    #         lines = out.readlines()
+
+    #     exit()
 
     def _nmr(
         self,
@@ -748,61 +832,124 @@ class NWChemProc(QmProc):
             prep: If True, a new input file is generated.
 
         Returns:
-            result: Dictionary containing the NMR shieldings.
+            result: Dictionary containing the NMR shieldings and/or spin spincoupling.
             meta: Metadata about the job.
         """
         # Initialize result and meta dictionaries
         result = {
-            "nmr_shieldings": None,
+            "energy": None,
+            "shieldings": None,
+            "couplings": None,
         }
         meta = {
             "success": None,
             "error": None,
         }
-
         # Set input/output file paths
-        inputpath = os.path.join(jobdir, f"{filename}.inp")
-        outputpath = os.path.join(jobdir, f"{filename}.out")
+        for ending in [x[4:] for x in job.prepinfo.keys() if "nmr" in x]:
+            # Set in/out path
+            inputpath = os.path.join(jobdir, f"{filename}_{ending}.inp")
+            outputpath = os.path.join(jobdir, f"{filename}_{ending}.out")
 
-        # Prepare input for NMR calculation
-        if prep:
-            indict = self.__prep(job, "nmr")
-            indict = self.__apply_flags(job, indict)
+            # Prepare an input file for _sp
+            # indict = self.__prep(job, f"nmr{ending}")
+            # inputpath = os.path.join(jobdir, f"{filename}.inp")
+            # outputpath = os.path.join(jobdir, f"{filename}.out")
 
-            # Write input file for NWChem NMR calculation
-            parser = NWChemParser()
-            parser.write_input(inputpath, indict)
+            # Prepare input for NMR calculation
+            print(ending)
+            if ending == "s":
+                jobname = "nmr_s"
+            elif ending == "j":
+                jobname = "nmr_j"
+            else:
+                jobname = "nmr"
+            # exit()
+            if prep:
+                indict = self.__prep(job, jobname)
+                indict = self.__apply_flags(job, indict)
 
-        # Execute the NWChem job
-        call = [f"{filename}.inp"]
-        returncode, errors = self._make_call("nwchem", call, outputpath, jobdir)
+                # Write input file for NWChem NMR calculation
+                parser = NWChemParser()
+                parser.write_input(inputpath, indict)
 
-        # Check if the job succeeded
-        meta["success"] = returncode == 0
-        if not meta["success"]:
-            logger.warning(
-                f"NMR job for {job.conf.name} failed. Stderr output:\n{errors}"
+            # Execute the NWChem job
+            call = [f"{filename}_{ending}.inp"]
+            call.insert(0, "mpirun")
+            call.insert(1, "-np")
+            call.insert(2, str(job.omp))
+            returncode, errors = self._make_call("nwchem", call, outputpath, jobdir)
+
+            # Check if the job succeeded
+            meta["success"] = returncode == 0
+            if not meta["success"]:
+                logger.warning(
+                    f"NMR job for {job.conf.name} failed. Stderr output:\n{errors}"
+                )
+
+            # Parse the output to extract NMR shieldings
+            with open(outputpath, "r", encoding="utf-8") as out:
+                lines = out.readlines()
+
+            # Get final energy
+            result["energy"] = next(
+                (
+                    float(line.split()[4])
+                    for line in lines
+                    if "Total DFT energy" in line
+                ),
+                None,
             )
 
-        # Parse the output to extract NMR shieldings
-        with open(outputpath, "r", encoding="utf-8") as out:
-            lines = out.readlines()
+            # Extract NMR shieldings (if present)
+            if ending in ["", "s"]:
+                start = lines.index(
+                    next(line for line in lines if "Wrote CPHF data to" in line)
+                )
 
-        # Extract NMR shieldings (if present)
-        result["nmr_shieldings"] = []
-        for line in lines:
-            if "NMR shielding tensor" in line:
-                # Parse NMR shieldings (this is highly dependent on the NWChem output format)
-                result["nmr_shieldings"].append(line.strip())
+                result["shieldings"] = []
+                for line in lines[start:]:
+                    if "Atom" in line:
+                        idx = int(line.split()[1]) - 1
+                        # print(line, idx)
+                    if "isotropic" in line:
+                        # print(line, idx)
+                        result["shieldings"].append((idx, float(line.split()[2])))
+                    if "Task" in line:
+                        break
 
-        # Check for errors and update metadata
-        if meta["success"]:
-            meta["error"] = self.__check_output(lines)
-            meta["success"] = meta["error"] is None and bool(result["nmr_shieldings"])
-        else:
-            meta["error"] = self.__returncode_to_err.get(returncode, "unknown_error")
+            # extract NMR coupling constants (if present)
+            # if ending in ["", "j"]:
+            # 'couplings' contains a list of tuples ((atom_index1, atom_index2), coupling), with the indices of the atoms
+            # in the internal coordinates of the GeometryData. A set is used to represent an atom pair and then converted
+            # to tuple to be serializable.
+            result["couplings"] = []
+            for line in lines:
+                if "Indirect Spin-Spin" in line:
+                    index = lines.index(line)
+            for line in lines[index:]:
+                if "Atom" in line:
+                    # splitline = line.split()
+                    # line looks like Atom    1:  13-C  and Atom    2:  13-C
+                    # so we need to extract the atom numbers
+                    idx1 = int(line.split()[1][:-1])
+                    idx2 = int(line.split()[4][:-1])
+                indicies = (idx1, idx2)
+                # now we need the coupling constant, looks like: Isotropic Spin-Spin Coupling =      82.8248 Hz
+                if "Isotropic Spin-Spin Coupling" in line:
+                    coupling = float(line.split()[4])
+                    result["couplings"].append((indicies, coupling))
+    
+            # Check for errors and update metadata
+            if meta["success"]:
+                meta["error"] = self.__check_output(lines)
+                meta["success"] = meta["error"] is None and bool(result["shieldings"])
+            else:
+                meta["error"] = self.__returncode_to_err.get(
+                    returncode, "unknown_error"
+                )
 
-        return result, meta
+            return result, meta
 
     def _uvvis(
         self,
@@ -847,6 +994,9 @@ class NWChemProc(QmProc):
 
         # Execute the NWChem job
         call = [f"{filename}.inp"]
+        call.insert(0, "mpirun")
+        call.insert(1, "-np")
+        call.insert(2, str(job.omp))
         returncode, errors = self._make_call("nwchem", call, outputpath, jobdir)
 
         # Check if the job succeeded
@@ -875,260 +1025,274 @@ class NWChemProc(QmProc):
 
         return result, meta
 
-    # def _xtb_opt(
-    #     self, job: ParallelJob, jobdir: str, filename: str = "xtb_opt"
-    # ) -> tuple[dict[str, any], dict[str, any]]:
-    #     """
-    #     Geometry optimization using ANCOPT and ORCA gradients.
-    #     Note that solvation is handled here always implicitly.
+    def _xtb_opt(
+        self, job: ParallelJob, jobdir: str, filename: str = "xtb_opt"
+    ) -> tuple[dict[str, any], dict[str, any]]:
+        """
+        Geometry optimization using ANCOPT.
+        Note that solvation is handled here always implicitly.
 
-    #     Args:
-    #         job: ParallelJob object containing the job information, metadata is stored in job.meta
-    #         jobdir: path to the job directory
-    #         filename: name of the input file
+        Args:
+            job: ParallelJob object containing the job information, metadata is stored in job.meta
+            jobdir: path to the job directory
+            filename: name of the input file
 
-    #     Returns:
-    #         result (dict[str, any]): dictionary containing the results of the calculation
-    #         meta (dict[str, any]): metadata about the job
+        Returns:
+            result (dict[str, any]): dictionary containing the results of the calculation
+            meta (dict[str, any]): metadata about the job
 
-    #     Keywords required in prepinfo:
-    #     - optcycles
-    #     - hlow
-    #     - optlevel
-    #     - macrocycles
-    #     - constraints
+        Keywords required in prepinfo:
+        - optcycles
+        - hlow
+        - optlevel
+        - macrocycles
+        - constraints
 
-    #     result = {
-    #         "energy": None,
-    #         "cycles": None,
-    #         "converged": None,
-    #         "ecyc": None,
-    #         "grad_norm": None,
-    #         "geom": None,
-    #     }
-    #     """
-    #     # NOTE: some "intuitivity problems":
-    #     # the geometry of the conformer is written into a coord file and also into a xyz-file to be used by orca
-    #     # xtb then outputs a file with the optimized geometry as 'xtbopt.coord', which is then read into the conformer
-    #     # to update it's geometry
+        result = {
+            "energy": None,
+            "cycles": None,
+            "converged": None,
+            "ecyc": None,
+            "grad_norm": None,
+            "geom": None,
+        }
+        """
+        # NOTE: some "intuitivity problems":
+        # the geometry of the conformer is written into a coord file and also into a xyz-file to be used by orca
+        # xtb then outputs a file with the optimized geometry as 'xtbopt.coord', which is then read into the conformer
+        # to update it's geometry
 
-    #     # prepare result
-    #     # 'ecyc' contains the energies for all cycles, 'cycles' stores the number of required cycles
-    #     # 'gncyc' contains the gradient norms for all cycles
-    #     # 'energy' contains the final energy of the optimization (converged or unconverged)
-    #     # 'geom' stores the optimized geometry in GeometryData.xyz format
-    #     result = {
-    #         "energy": None,
-    #         "cycles": None,
-    #         "converged": None,
-    #         "ecyc": None,
-    #         "grad_norm": None,
-    #         "gncyc": None,
-    #         "geom": None,
-    #     }
+        # prepare result
+        # 'ecyc' contains the energies for all cycles, 'cycles' stores the number of required cycles
+        # 'gncyc' contains the gradient norms for all cycles
+        # 'energy' contains the final energy of the optimization (converged or unconverged)
+        # 'geom' stores the optimized geometry in GeometryData.xyz format
+        result = {
+            "energy": None,
+            "cycles": None,
+            "converged": None,
+            "ecyc": None,
+            "grad_norm": None,
+            "gncyc": None,
+            "geom": None,
+        }
 
-    #     meta = {
-    #         "success": None,
-    #         "error": None,
-    #         "mo_path": None,
-    #     }
+        meta = {
+            "success": None,
+            "error": None,
+            "mo_path": None,
+        }
 
-    #     xcontrolname = "xtb_opt-xcontrol-inp"
+        xcontrolname = "xtb_opt-xcontrol-inp"
 
-    #     files = [
-    #         "xtbrestart",
-    #         "xtbtopo.mol",
-    #         xcontrolname,
-    #         "wbo",
-    #         "charges",
-    #         "gfnff_topo",
-    #     ]
+        files = [
+            "xtbrestart",
+            "xtbtopo.mol",
+            xcontrolname,
+            "wbo",
+            "charges",
+            "gfnff_topo",
+        ]
 
-    #     # remove potentially preexisting files to avoid confusion
-    #     for file in files:
-    #         if os.path.isfile(os.path.join(jobdir, file)):
-    #             os.remove(os.path.join(jobdir, file))
+        # remove potentially preexisting files to avoid confusion
+        for file in files:
+            if os.path.isfile(os.path.join(jobdir, file)):
+                os.remove(os.path.join(jobdir, file))
 
-    #     # write conformer geometry to coord file
-    #     with open(os.path.join(jobdir, f"{filename}.coord"), "w", newline=None) as file:
-    #         file.writelines(job.conf.tocoord())
+        # write conformer geometry to coord file
+        with open(os.path.join(jobdir, f"{filename}.coord"), "w", newline=None) as file:
+            file.writelines(job.conf.tocoord())
 
-    #     # write xyz-file for orca
-    #     with open(os.path.join(jobdir, f"{filename}.xyz"), "w", newline=None) as file:
-    #         file.writelines(job.conf.toxyz())
+        # write xyz-file for orca
+        with open(os.path.join(jobdir, f"{filename}.xyz"), "w", newline=None) as file:
+            file.writelines(job.conf.toxyz())
 
-    #     # set orca input path
-    #     inputpath = os.path.join(jobdir, f"{filename}.inp")
+        # set orca input path
+        inputpath = os.path.join(jobdir, f"{filename}.inp")
 
-    #     # prepare input dict
-    #     parser = NWChemParser()
-    #     indict = self.__prep(job, "xtb_opt", xyzfile=f"{filename}.xyz")
+        # prepare input dict
+        # parser = NWChemParser()
+        # indict = self.__prep(job, "xtb_opt", xyzfile=f"{filename}.xyz")
 
-    #     # apply flags
-    #     indict = self.__apply_flags(job, indict)
+        # apply flags
+        # indict = self.__apply_flags(job, indict)
 
-    #     # write orca input into file "xtb_opt.inp" in a subdir created for the
-    #     # conformer
-    #     parser.write_input(inputpath, indict)
+        # write nwchem input into file "xtb_opt.inp" in a subdir created for the
+        # conformer
+        # parser.write_input(inputpath, indict)
 
-    #     # append some additional lines to the coord file for ancopt
-    #     with open(
-    #         os.path.join(jobdir, f"{filename}.coord"), "a", newline=None
-    #     ) as newcoord:
-    #         newcoord.writelines(
-    #             [
-    #                 "$external\n",
-    #                 f"   orca input file= {filename}.inp\n",
-    #                 f"   orca bin= {self._paths['orcapath']}\n",
-    #                 "$end\n",
-    #             ]
-    #         )
+        # append some additional lines to the coord file for ancopt
+        # with open(
+        #     os.path.join(jobdir, f"{filename}.coord"), "a", newline=None
+        # ) as newcoord:
+        #     newcoord.writelines(
+        #         [
+        #             "$external\n",
+        #             f"   orca input file= {filename}.inp\n",
+        #             f"   orca bin= {self._paths['orcapath']}\n",
+        #             "$end\n",
+        #         ]
+        #     )
 
-    #     # prepare configuration file for ancopt (xcontrol file)
-    #     with open(os.path.join(jobdir, xcontrolname), "w", newline=None) as out:
-    #         out.write("$opt \n")
-    #         if job.prepinfo["xtb_opt"]["macrocycles"]:
-    #             out.write(f"maxcycle={job.prepinfo['xtb_opt']['optcycles']} \n")
-    #             out.write(f"microcycle={job.prepinfo['xtb_opt']['optcycles']} \n")
+        # prepare configuration file for ancopt (xcontrol file)
+        with open(os.path.join(jobdir, xcontrolname), "w", newline=None) as out:
+            out.write("$opt \n")
+            if job.prepinfo["xtb_opt"]["macrocycles"]:
+                out.write(f"maxcycle={job.prepinfo['xtb_opt']['optcycles']} \n")
+                out.write(f"microcycle={job.prepinfo['xtb_opt']['optcycles']} \n")
 
-    #         out.writelines(
-    #             [
-    #                 "average conv=true \n",
-    #                 f"hlow={job.prepinfo['xtb_opt']['hlow']} \n",
-    #                 "s6=30.00 \n",
-    #                 "engine=lbfgs\n",
-    #                 "$external\n",
-    #                 f"   orca input file= {filename}.inp\n",
-    #                 f"   orca bin= {self._paths['orcapath']} \n",
-    #             ]
-    #         )
+            # out.writelines(
+            #     [
+            #         "average conv=true \n",
+            #         f"hlow={job.prepinfo['xtb_opt']['hlow']} \n",
+            #         "s6=30.00 \n",
+            #         "engine=lbfgs\n",
+            #         "$external\n",
+            #         f"   orca input file= {filename}.inp\n",
+            #         f"   orca bin= {self._paths['orcapath']} \n",
+            #     ]
+            # )
 
-    #         # Import constraints
-    #         if job.prepinfo["xtb_opt"]["constraints"] is not None:
-    #             with open(job.prepinfo["xtb_opt"]["constraints"], "r") as f:
-    #                 lines = f.readlines()
+            # Import constraints
+            if job.prepinfo["xtb_opt"]["constraints"] is not None:
+                with open(job.prepinfo["xtb_opt"]["constraints"], "r") as f:
+                    lines = f.readlines()
 
-    #             out.writelines(lines)
+                out.writelines(lines)
 
-    #         out.write("$end \n")
+            out.write("$end \n")
 
-    #     # check, if there is an existing .gbw file and copy it if option
-    #     # 'copy_mo' is true
-    #     if self.copy_mo:
-    #         self.__copy_mo(jobdir, filename, job.mo_guess)
+        # check, if there is an existing .gbw file and copy it if option
+        # 'copy_mo' is true
+        # if self.copy_mo:
+        #     self.__copy_mo(jobdir, filename, job.mo_guess)
 
-    #     # prepare xtb call
-    #     call = [
-    #         f"{filename}.coord",  # name of the coord file generated above
-    #         "--opt",
-    #         job.prepinfo["xtb_opt"]["optlevel"],
-    #         "--orca",
-    #         "-I",
-    #         xcontrolname,
-    #     ]
+        # prepare xtb call
+        call = [
+            f"{filename}.coord",  # name of the coord file generated above
+            "--opt",
+            job.prepinfo["xtb_opt"]["optlevel"],
+            # "--orca",
+            "-I",
+            xcontrolname,
+        ]
 
-    #     # set path to the ancopt output file
-    #     outputpath = os.path.join(jobdir, f"{filename}.out")
+        # set path to the ancopt output file
+        outputpath = os.path.join(jobdir, f"{filename}.out")
 
-    #     # call xtb
-    #     returncode, errors = self._make_call("xtb", call, outputpath, jobdir)
+        # call xtb
+        returncode, errors = self._make_call("xtb", call, outputpath, jobdir)
 
-    #     # check if optimization finished without errors
-    #     # NOTE: right now, not converging scfs are not handled because returncodes need to be implemented first
-    #     if returncode != 0:
-    #         meta["success"] = False
-    #         meta["error"] = "unknown_error"
-    #         logger.warning(f"Job for {job.conf.name} failed. Stderr output:\n{errors}")
-    #         # TODO - the xtb returncodes should be handled
-    #         return result, meta
+        # check if optimization finished without errors
+        # NOTE: right now, not converging scfs are not handled because returncodes need to be implemented first
+        if returncode != 0:
+            meta["success"] = False
+            meta["error"] = "unknown_error"
+            logger.warning(f"Job for {job.conf.name} failed. Stderr output:\n{errors}")
+            # TODO - the xtb returncodes should be handled
+            return result, meta
 
-    #     # read output
-    #     with open(outputpath, "r", encoding=CODING, newline=None) as file:
-    #         lines = file.readlines()
+        # read output
+        with open(outputpath, "r", encoding=Config.CODING, newline=None) as file:
+            lines = file.readlines()
 
-    #     result["ecyc"] = []
-    #     result["cycles"] = 0
+        result["ecyc"] = []
+        result["cycles"] = 0
 
-    #     # Substrings indicating error in xtb
-    #     error_ind = [
-    #         "external code error",
-    #         "|grad| > 500, something is totally wrong!",
-    #         "abnormal termination of xtb",
-    #     ]
+        # Substrings indicating error in xtb
+        error_ind = [
+            "external code error",
+            "|grad| > 500, something is totally wrong!",
+            "abnormal termination of xtb",
+        ]
 
-    #     # Check if xtb terminated normally (if there are any error indicators
-    #     # in the output)
-    #     meta["success"] = (
-    #         False
-    #         if next((x for x in lines if any(y in x for y in error_ind)), None)
-    #         is not None
-    #         else True
-    #     )
-    #     if not meta["success"]:
-    #         meta["error"] = "unknown_error"
-    #         return result, meta
+        # Check if xtb terminated normally (if there are any error indicators
+        # in the output)
+        meta["success"] = (
+            False
+            if next((x for x in lines if any(y in x for y in error_ind)), None)
+            is not None
+            else True
+        )
+        if not meta["success"]:
+            meta["error"] = "unknown_error"
+            return result, meta
+        print(meta["success"])
+        # exit()
 
-    #     # check convergence
-    #     if (
-    #         next((True for x in lines if "GEOMETRY OPTIMIZATION CONVERGED" in x), None)
-    #         is True
-    #     ):
-    #         result["converged"] = True
-    #     elif (
-    #         next((True for x in lines if "FAILED TO CONVERGE GEOMETRY" in x), None)
-    #         is True
-    #     ):
-    #         result["converged"] = False
+        # check convergence
+        if (
+            next((True for x in lines if "GEOMETRY OPTIMIZATION CONVERGED" in x), None)
+            is True
+        ):
+            result["converged"] = True
+        elif (
+            next((True for x in lines if "FAILED TO CONVERGE GEOMETRY" in x), None)
+            is True
+        ):
+            result["converged"] = False
+        print(result["converged"])
 
-    #     # Get the number of cycles
-    #     if result["converged"] is not None:
-    #         # tmp is one of the values from the dict defined below
-    #         tmp = {
-    #             True: ("GEOMETRY OPTIMIZATION CONVERGED", 5),
-    #             False: ("FAILED TO CONVERGE GEOMETRY", 7),
-    #         }
-    #         tmp = tmp[result["converged"]]
+        # Get the number of cycles
+        if result["converged"] is not None:
+            # tmp is one of the values from the dict defined below
+            tmp = {
+                True: ("GEOMETRY OPTIMIZATION CONVERGED", 5),
+                False: ("FAILED TO CONVERGE GEOMETRY", 7),
+            }
+            tmp = tmp[result["converged"]]
+            # print(tmp)
+            # exit()
+            # print(next(x for x in lines if tmp[0] in x).split()[tmp[1]])
+            # exit()
 
-    #         result["cycles"] = int(
-    #             next(x for x in lines if tmp[0] in x).split()[tmp[1]]
-    #         )
+            result["cycles"] = int(
+                next(x for x in lines if tmp[0] in x).split()[tmp[1]]
+            )
+            print(result["cycles"])
+            # exit()
+            print(result["ecyc"])
+            # exit()
+            print(
+                line.split("->")[-1] for line in filter(lambda x: "av. E: " in x, lines)
+            )
 
-    #         # Get energies for each cycle
-    #         result["ecyc"].extend(
-    #             float(line.split("->")[-1])
-    #             for line in filter(lambda x: "av. E: " in x, lines)
-    #         )
+            # Get energies for each cycle
+            result["ecyc"].extend(
+                float(line.split("->")[-1])
+                for line in filter(lambda x: "av. E: " in x, lines)
+            )
 
-    #         # Get all gradient norms for evaluation
-    #         result["gncyc"] = [
-    #             float(line.split()[3])
-    #             for line in filter(lambda x: " gradient norm " in x, lines)
-    #         ]
+            # Get all gradient norms for evaluation
+            result["gncyc"] = [
+                float(line.split()[3])
+                for line in filter(lambda x: " gradient norm " in x, lines)
+            ]
 
-    #         # Get the last gradient norm
-    #         result["grad_norm"] = result["gncyc"][-1]
+            # Get the last gradient norm
+            result["grad_norm"] = result["gncyc"][-1]
 
-    #         # store the final energy of the optimization in 'energy'
-    #         result["energy"] = result["ecyc"][-1]
-    #         meta["success"] = True
+            # store the final energy of the optimization in 'energy'
+            result["energy"] = result["ecyc"][-1]
+            meta["success"] = True
 
-    #     if self.copy_mo:
-    #         # store the path to the current .gbw file for this conformer
-    #         meta["mo_path"] = os.path.join(jobdir, f"{filename}.gbw")
+        if self.copy_mo:
+            # store the path to the current .gbw file for this conformer
+            meta["mo_path"] = os.path.join(jobdir, f"{filename}.gbw")
 
-    #     # read out optimized geometry and update conformer geometry with this
-    #     job.conf.fromcoord(os.path.join(jobdir, "xtbopt.coord"))
-    #     result["geom"] = job.conf.xyz
+        # read out optimized geometry and update conformer geometry with this
+        job.conf.fromcoord(os.path.join(jobdir, "xtbopt.coord"))
+        result["geom"] = job.conf.xyz
 
-    #     # TODO - this might be a case where it would be reasonable to raise an
-    #     # exception
-    #     try:
-    #         assert result["converged"] is not None
-    #     except AssertionError:
-    #         meta["success"] = False
-    #         meta["error"] = "unknown_error"
+        # TODO - this might be a case where it would be reasonable to raise an
+        # exception
+        try:
+            assert result["converged"] is not None
+        except AssertionError:
+            meta["success"] = False
+            meta["error"] = "unknown_error"
 
-    #     return result, meta
+        return result, meta
 
     def __prep(
         self, job: ParallelJob, jobtype: str, no_solv: bool = False
@@ -1154,27 +1318,26 @@ class NWChemProc(QmProc):
         ]
 
         # Prepare the geometry section
-        indict["geometry"] = [
+        indict["geom"] = [
             job.conf.xyz,  # Assuming job.conf.xyz holds properly formatted XYZ coordinates
         ]
-        # print(indict["geometry"])
-        # exit()
         # Prepare the basis set (use default from settings or allow customization)
         basis_set = indict["main"][1]
 
-        indict["basis"] = ["basis", f"* library {basis_set}", "end"]
+        indict["basis"] = ["basis spherical", f"* library {basis_set}", "end"]
 
         # Prepare the DFT section with flexibility for different functionals
         functional = indict["main"][0]
         indict["dft"] = [
             "dft",
+            'noprint "final vectors analysis" multipole',
             f"  xc {functional}",
             "end",
         ]
 
         # # Add solvent model if applicable and not explicitly disabled
-        if "sm" in job.prepinfo[jobtype] and not no_solv:
-            print("sm check", job.prepinfo[jobtype]["sm"])
+        # if "sm" in job.prepinfo[jobtype] and not no_solv:
+        #     print("sm check", job.prepinfo[jobtype]["sm"])
         if (
             not no_solv
             and not job.prepinfo["general"]["gas-phase"]
@@ -1187,8 +1350,8 @@ class NWChemProc(QmProc):
             )
             dielect = self.__cosmo_dcs[solv]
             indict["solvation"] = ["cosmo", f"  dielec {dielect}", "end"]
-            print("solvent", solv, "DIELECTRIC", self.__cosmo_dcs[solv])
-            exit()
+            # print("solvent", solv, "DIELECTRIC", self.__cosmo_dcs[solv])
+            # exit()
 
         # Set up task based on jobtype (e.g., single-point energy, optimization, etc.)
         if jobtype == "sp":
@@ -1197,8 +1360,14 @@ class NWChemProc(QmProc):
             indict["task"] = ["task dft optimize"]
         elif jobtype == "gsolv" and not no_solv:
             indict["task"] = ["task dft energy"]
-        elif jobtype == "nmr":
-            indict["task"] = ["task dft nmr"]
+        elif "nmr" in jobtype:
+            indict["task"] = ["task dft property"]
+            indict["property"] = ["property", "end"]
+            if jobtype.endswith("s") or jobtype == "nmr":
+                indict["property"].insert(-1, "  shielding")
+            if jobtype.endswith("j") or jobtype == "nmr":
+                indict["dft"].insert(-1, "odft")
+                indict["property"].insert(-1, "  spinspin")
         elif jobtype == "uvvis":
             indict["task"] = ["task dft excitation"]
 
@@ -1216,11 +1385,11 @@ class NWChemProc(QmProc):
 
         # grab func, basis
         # exit()
-        if jobtype == "gsolv":
-            print("jobtype", jobtype)
-            jobtype = "xtb_gsolv"
-            print("jobtype", jobtype)
-            exit()
+        # if jobtype == "gsolv":
+        #     print("jobtype", jobtype)
+        #     jobtype = "xtb_gsolv"
+        #     print("jobtype", jobtype)
+        #     exit()
         # prepinfo["xtb_sp"] = {
         #     "gfnv": self.get_settings()["gfnv"],
         #     "solvent_key_xtb": SolventHelper.get_solvent(
@@ -1228,6 +1397,8 @@ class NWChemProc(QmProc):
         #         self.get_general_settings()["solvent"],
         #     ),
         # }
+        # if jobtype == "xtb_opt":
+        #     jobtype = "opt"
         print("prepinfo", prepinfo)
         print("jobtype", prepinfo[jobtype], jobtype)
         func = prepinfo[jobtype]["func_name"]
@@ -1280,3 +1451,8 @@ class NWChemProc(QmProc):
                 key = next(filter(lambda x: x in line, out_to_err.keys()))
                 return out_to_err[key]
         return None
+
+
+print("Registering NWChemProc with Factory")
+Factory.register_builder("nwchem", NWChemProc)
+print("Registered builders:", Factory._Factory__builders)

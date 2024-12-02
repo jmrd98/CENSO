@@ -287,16 +287,27 @@ class QmProc:
                 "orca": "orcapath",
                 "nwchem": "nwchempath",
             }
+            # print(pathmap, prog, call)
             try:
                 assert self._paths[pathmap[prog]].strip() != ""
                 # NOTE: turbomole does not need this step since you can just call a binary w/o path
                 # Also the binaries are called differently for different purposes
                 # (e.g. ridft for single-points, but not for NMR, instead the binary names are passed in the call)
-                call.insert(0, self._paths[pathmap[prog]])
+                if prog == "nwchem":
+                    call.insert(-1, self._paths[pathmap[prog]])
+                else:
+                    call.insert(0, self._paths[pathmap[prog]])
             except AssertionError as exc:
                 raise AssertionError(
                     f"Path for {prog} not found. Please set up {pathmap[prog]} in the rcfile."
                 ) from exc
+            # print(call)
+            # if prog == "nwchem":
+            #     call.insert(0, "mpirun")
+            #     call.insert(1, "-np")
+            #     call.insert(2, str(4))
+            # print(call)
+            # exit()
 
         # call external program and write output into outputfile
         with open(outputpath, "w", newline=None) as outputfile:
