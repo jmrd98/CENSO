@@ -919,26 +919,28 @@ class NWChemProc(QmProc):
                         break
 
             # extract NMR coupling constants (if present)
-            # if ending in ["", "j"]:
+            if ending in ["", "j"]:
             # 'couplings' contains a list of tuples ((atom_index1, atom_index2), coupling), with the indices of the atoms
             # in the internal coordinates of the GeometryData. A set is used to represent an atom pair and then converted
             # to tuple to be serializable.
-            result["couplings"] = []
-            for line in lines:
-                if "Indirect Spin-Spin" in line:
-                    index = lines.index(line)
-            for line in lines[index:]:
-                if "Atom" in line:
-                    # splitline = line.split()
-                    # line looks like Atom    1:  13-C  and Atom    2:  13-C
-                    # so we need to extract the atom numbers
-                    idx1 = int(line.split()[1][:-1])
-                    idx2 = int(line.split()[4][:-1])
-                indicies = (idx1, idx2)
-                # now we need the coupling constant, looks like: Isotropic Spin-Spin Coupling =      82.8248 Hz
-                if "Isotropic Spin-Spin Coupling" in line:
-                    coupling = float(line.split()[4])
-                    result["couplings"].append((indicies, coupling))
+                result["couplings"] = []
+                for line in lines:
+                    if "Indirect Spin-Spin" in line:
+                        index = lines.index(line)
+                for line in lines[index:]:
+                    if "Atom" in line:
+                        # splitline = line.split()
+                        # line looks like Atom    1:  13-C  and Atom    2:  13-C
+                        # so we need to extract the atom numbers
+                        idx1 = int(line.split()[1][:-1])
+                        idx2 = int(line.split()[5][:-1])
+                    indicies = (idx1, idx2)
+                    # now we need the coupling constant, looks like: Isotropic Spin-Spin Coupling =      82.8248 Hz
+                    if "Isotropic Spin-Spin Coupling" in line:
+                        coupling = float(line.split()[4])
+                        result["couplings"].append((indicies, coupling))
+                    if "Chemical Shielding Tensors" in line:
+                        break
     
             # Check for errors and update metadata
             if meta["success"]:
@@ -1335,6 +1337,10 @@ class NWChemProc(QmProc):
             "end",
         ]
 
+        # check/add dispersion terms
+        disp = job.prepinfo[jobtype]["disp"]
+        if "d3bj" in disp:
+            indict["dft"].insert(-1, "DISP vdw 4")
         # # Add solvent model if applicable and not explicitly disabled
         # if "sm" in job.prepinfo[jobtype] and not no_solv:
         #     print("sm check", job.prepinfo[jobtype]["sm"])

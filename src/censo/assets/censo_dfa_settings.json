@@ -278,7 +278,7 @@
       "type": "global_hybrid"
     },
     "b3lyp-d3": {
-      "nwchem": null,
+      "nwchem": "b3lyp",
       "tm": "b3-lyp",
       "orca": "b3lyp",
       "disp": "d3bj",
